@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use rayon::prelude::*;
 use serde::Serialize;
-use wired_sim::FlyModel;
+use wired_sim::{FlyModel, TaskConfig};
 
 const DEFAULT_MODEL: &str = "data/flybody/fruitfly.xml";
 const DEFAULT_RESULTS: &str = "results/spike.json";
@@ -53,6 +53,22 @@ fn run() -> Result<(), Box<dyn Error>> {
     if command == "help" || command == "--help" || command == "-h" {
         print_help();
         return Ok(());
+    }
+    if command == "probe" {
+        let mut tethered = false;
+        while let Some(flag) = args.next() {
+            match flag.as_str() {
+                "--model" => model_path = PathBuf::from(value(&mut args, "--model")?),
+                "--seconds" => seconds = value(&mut args, "--seconds")?.parse()?,
+                "--tethered" => tethered = true,
+                _ => return Err(format!("unknown argument: {flag}").into()),
+            }
+        }
+        return if tethered {
+            probe_tethered(&model_path, seconds)
+        } else {
+            probe(&model_path, seconds)
+        };
     }
     if command != "spike" {
         return Err(format!("unknown command: {command}").into());
@@ -139,6 +155,120 @@ fn run() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn probe(model_path: &Path, seconds: f64) -> Result<(), Box<dyn Error>> {
+    let model = FlyModel::load(model_path)?;
+    let config = TaskConfig::default();
+    let mut env = model.env(config)?;
+    env.reset();
+    let steps = (seconds / (model.timestep() * config.control_decimation as f64))
+        .round()
+        .max(1.0) as usize;
+    let action = vec![0.0_f32; model.action_dim()];
+
+    println!(
+        "model={} action_dim={} observation_dim={} control_decimation={} steps={steps}",
+        model_path.display(),
+        model.action_dim(),
+        env.observation_dim(),
+        config.control_decimation
+    );
+    println!(
+        "reset: height={:.4} contacts={}",
+        env.height(),
+        env.contact_count()
+    );
+    for leg in ["T1", "T2", "T3"] {
+        for side in ["left", "right"] {
+            let name = format!("claw_{leg}_{side}");
+            if let Some(position) = env.body_position(&name) {
+                println!(
+                    "  {name}: x={:.4} y={:.4} z={:.4}",
+                    position[0], position[1], position[2]
+                );
+            }
+        }
+    }
+
+    let mut total_reward = 0.0;
+    let mut done_at = None;
+    for step in 0..steps {
+        let result = env.step(&action)?;
+        total_reward += result.reward;
+        if step % 20 == 0 || result.done {
+            println!(
+                "step={} height={:.4} contacts={} forward_speed={:.4} reward={:.4} done={}",
+                step + 1,
+                env.height(),
+                env.contact_count(),
+                env.forward_speed(),
+                result.reward,
+                result.done
+            );
+        }
+        if result.done {
+            done_at = Some(step + 1);
+            break;
+        }
+    }
+    println!(
+        "summary: steps={} mean_reward={:.4} done_at={done_at:?}",
+        done_at.unwrap_or(steps),
+        total_reward / done_at.unwrap_or(steps) as f64
+    );
+
+    Ok(())
+}
+
+fn probe_tethered(model_path: &Path, seconds: f64) -> Result<(), Box<dyn Error>> {
+    let model = FlyModel::load_tethered(model_path)?;
+    let config = TaskConfig::default();
+    let mut env = model.tethered_env(config)?;
+    env.reset();
+    let steps = (seconds / (model.timestep() * config.control_decimation as f64))
+        .round()
+        .max(1.0) as usize;
+    let action = vec![0.0_f32; model.action_dim()];
+
+    println!(
+        "tethered model={} action_dim={} observation_dim={} control_decimation={} steps={steps}",
+        model_path.display(),
+        model.action_dim(),
+        env.observation_dim(),
+        config.control_decimation
+    );
+    println!(
+        "reset: ball_qvel={:?} contacts={}",
+        env.ball_velocity(),
+        env.contact_count()
+    );
+
+    let mut total_reward = 0.0;
+    for step in 0..steps {
+        let result = env.step(&action)?;
+        total_reward += result.reward;
+        if step % 20 == 0 || result.done {
+            println!(
+                "step={} ball_qvel={:?} contacts={} reward={:.4} done={}",
+                step + 1,
+                env.ball_velocity(),
+                env.contact_count(),
+                result.reward,
+                result.done
+            );
+        }
+        if result.done {
+            break;
+        }
+    }
+    println!(
+        "summary: steps={} mean_reward={:.4}",
+        env.steps(),
+        total_reward / env.steps().max(1) as f64
+    );
+
+    Ok(())
+}
+
 fn value(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {
     args.next()
         .ok_or_else(|| format!("{flag} requires a value"))
@@ -151,8 +281,10 @@ fn display_path(path: &Path) -> String {
 fn print_help() {
     println!(
         "wired-sim\n\n\
-         spike [--model FILE] [--worlds N] [--threads N] [--seconds N] [--results FILE]\n\n\
+         spike [--model FILE] [--worlds N] [--threads N] [--seconds N] [--results FILE]\n\
+         probe [--model FILE] [--seconds N] [--tethered]\n\n\
          Defaults: data/flybody/fruitfly.xml, 8 worlds, all logical CPUs, 10 seconds,\n\
-         results/spike.json. Controls are held at zero; this measures physics throughput."
+         results/spike.json. Controls are held at neutral normalized values.\n\
+         probe prints the reset height and a short neutral-action rollout."
     );
 }

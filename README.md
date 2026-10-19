@@ -31,11 +31,19 @@ The plan's informal gate was about 10,000 control steps/s. The current CPU-physi
 - [x] MaleCNS VNC graph loader (descending, intrinsic, leg motor, leg sensory neurons)
 - [x] Flybody MuJoCo spike and throughput measurement
 - [x] Burn CUDA smoke test
-- [ ] PPO baseline on the fly body
+- [x] PPO baseline implementation on the tethered fly-on-ball task
+- [ ] PPO baseline that demonstrably improves over the neutral policy
 - [ ] Connectome-constrained recurrent policy
 - [ ] Custom sparse-step GPU kernel
 - [ ] Connectome vs shuffled vs MLP experiment
 - [ ] Browser/WASM demo
+
+The PPO baseline is implemented and runs end-to-end on CUDA. A 50-update
+diagnostic run (8 environments, 64 rollout steps, 4 epochs) changed the
+deterministic evaluation reward from 0.262 to 0.274 and left the mean
+forward-ball error at 5.64. That is **not** a demonstrated learning result;
+it is a pipeline check. The next step is reward/curriculum work before any
+training claim is made.
 
 ## Requirements
 

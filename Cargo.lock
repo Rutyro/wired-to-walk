@@ -7221,6 +7221,7 @@ dependencies = [
  "burn",
  "rand 0.9.5",
  "rand_chacha 0.9.0",
+ "serde",
  "serde_json",
  "tracing",
  "tracing-subscriber",
