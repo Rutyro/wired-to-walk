@@ -84,6 +84,14 @@ Run the physics spike:
 cargo run --release -p wired-sim -- spike --worlds 8 --seconds 10
 ```
 
+Train the PPO baseline on CUDA:
+
+```powershell
+cargo run --release -p wired-train --features cuda -- ppo
+```
+
+For a CPU-only build, omit `--features cuda` and pass `-- --cpu`.
+
 Run the current test suite:
 
 ```powershell

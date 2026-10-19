@@ -23,7 +23,7 @@ rust-version = "1.95"
 [workspace.dependencies]
 arrow = { version = "60.0.0", default-features = false, features = ["ipc_compression"] }
 bincode = { version = "2.0.1", features = ["serde"] }
-burn = { version = "0.22.0", default-features = false, features = ["autodiff", "cuda", "flex", "optim", "std"] }
+burn = { version = "0.22.0", default-features = false, features = ["autodiff", "flex", "optim", "std", "store"] }
 mujoco-rs = { version = "6.1.0", features = ["auto-download-mujoco"] }
 rand = "0.9.2"
 rand_chacha = "0.9.0"

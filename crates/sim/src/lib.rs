@@ -8,6 +8,11 @@ use std::sync::Arc;
 use mujoco_rs::prelude::{MjData, MjModel, MjtObj, MjtTrn};
 use thiserror::Error;
 
+#[cfg(feature = "render")]
+mod render;
+#[cfg(feature = "render")]
+pub use render::FrameRenderer;
+
 #[derive(Debug, Error)]
 pub enum SimError {
     #[error("could not load MuJoCo model {path}: {detail}")]
@@ -95,9 +100,11 @@ impl FlyModel {
     }
 
     pub fn world(&self) -> Result<FlyWorld, SimError> {
+        let model = Arc::clone(&self.model);
         Ok(FlyWorld {
-            data: MjData::try_new(Arc::clone(&self.model))
+            data: MjData::try_new(Arc::clone(&model))
                 .map_err(|error| SimError::Data(error.to_string()))?,
+            model,
             controls: self.controls.clone(),
             wing_qpos: self.wing_qpos.clone(),
         })
@@ -154,6 +161,7 @@ impl FlyModel {
 
 pub struct FlyWorld {
     data: MjData<Arc<MjModel>>,
+    model: Arc<MjModel>,
     controls: Vec<Control>,
     wing_qpos: Vec<(usize, f64)>,
 }
@@ -246,6 +254,16 @@ impl FlyWorld {
         if qvel.len() >= 6 {
             qvel[..6].fill(0.0);
         }
+    }
+
+    #[cfg(feature = "render")]
+    pub(crate) fn renderer_model(&self) -> Arc<MjModel> {
+        Arc::clone(&self.model)
+    }
+
+    #[cfg(feature = "render")]
+    pub(crate) fn renderer_data(&mut self) -> &mut MjData<Arc<MjModel>> {
+        &mut self.data
     }
 }
 
@@ -564,6 +582,20 @@ impl TetheredEnv {
 
     pub fn steps(&self) -> usize {
         self.steps
+    }
+
+    #[cfg(feature = "render")]
+    pub fn frame_renderer(&self, width: usize, height: usize) -> Result<FrameRenderer, SimError> {
+        self.world.frame_renderer(width, height)
+    }
+
+    #[cfg(feature = "render")]
+    pub fn render_frame(
+        &mut self,
+        renderer: &mut FrameRenderer,
+        path: impl AsRef<Path>,
+    ) -> Result<(), SimError> {
+        self.world.render_frame(renderer, path)
     }
 
     pub fn contact_count(&self) -> usize {

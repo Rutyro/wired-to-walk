@@ -1,4 +1,6 @@
 mod ppo;
+#[cfg(feature = "render")]
+mod render;
 
 use std::env;
 use std::error::Error;
@@ -25,6 +27,12 @@ fn run() -> Result<(), Box<dyn Error>> {
     match command.as_str() {
         "smoke" => smoke(args),
         "ppo" => run_ppo(args),
+        #[cfg(feature = "render")]
+        "render" => render::run(args),
+        #[cfg(not(feature = "render"))]
+        "render" => {
+            Err("this build has no renderer; rebuild wired-train with --features render".into())
+        }
         "help" | "--help" | "-h" => {
             print_help();
             Ok(())
@@ -35,12 +43,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 
 fn smoke(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
     let use_cpu = args.any(|arg| arg == "--cpu");
-    let device = if use_cpu {
-        Device::flex()
-    } else {
-        Device::cuda(0)
-    }
-    .autodiff();
+    let device = ppo::select_device(use_cpu)?;
 
     let policy = MlpPolicy::new(OBSERVATION_DIM, 256, ACTION_DIM, &device);
     let input = Tensor::<2>::ones([8, OBSERVATION_DIM], &device).require_grad();
@@ -61,6 +64,7 @@ fn run_ppo(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>>
     let mut config = ppo::PpoConfig::default();
     let mut model_path = PathBuf::from(DEFAULT_MODEL);
     let mut output_path = ppo::default_output();
+    let mut policy_path = ppo::default_policy();
     let mut cpu = false;
 
     while let Some(flag) = args.next() {
@@ -77,6 +81,7 @@ fn run_ppo(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>>
             }
             "--model" => model_path = PathBuf::from(value(&mut args, "--model")?),
             "--output" => output_path = PathBuf::from(value(&mut args, "--output")?),
+            "--save" => policy_path = PathBuf::from(value(&mut args, "--save")?),
             "--cpu" => cpu = true,
             _ => return Err(format!("unknown argument: {flag}").into()),
         }
@@ -91,7 +96,7 @@ fn run_ppo(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>>
         return Err("envs, rollout, epochs, minibatch and episode-steps must be positive".into());
     }
 
-    ppo::run(&model_path, &output_path, config, cpu)
+    ppo::run(&model_path, &output_path, &policy_path, config, cpu)
 }
 
 fn value(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {
@@ -106,6 +111,7 @@ fn print_help() {
            initialize the MLP, run a forward pass and one backward pass\n\n\
          ppo [options]\n\
            train the MLP baseline on the tethered fly-on-ball task\n\n\
+           --save FILE        policy checkpoint (default results/ppo-policy.bpk)\n\
            --updates N        PPO updates (default 100)\n\
            --envs N           parallel environments (default 8)\n\
            --rollout N        steps per environment per update (default 64)\n\
@@ -116,6 +122,13 @@ fn print_help() {
            --episode-steps N  policy steps per episode (default 500)\n\
            --model FILE       flybody XML (default data/flybody/fruitfly.xml)\n\
            --output FILE      report path (default results/ppo.json)\n\
+           --cpu              use the Flex CPU backend\n\n\
+         render [options]\n\
+           replay a saved policy and write PNG frames\n\n\
+           --policy FILE      policy checkpoint (default results/ppo-policy.bpk)\n\
+           --output DIR       frame directory (default results/frames)\n\
+           --seconds N        replay duration (default 5)\n\
+           --fps N            saved frame rate (default 30)\n\
            --cpu              use the Flex CPU backend\n\n\
          The default device is CUDA 0 with autodiff enabled."
     );

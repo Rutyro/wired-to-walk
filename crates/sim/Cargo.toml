@@ -6,6 +6,10 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+default = []
+render = ["mujoco-rs/renderer-winit-fallback"]
+
 [dependencies]
 mujoco-rs.workspace = true
 rayon.workspace = true

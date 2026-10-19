@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use burn::module::Module;
 use burn::optim::{AdamConfig, GradientsParams};
 use burn::prelude::*;
+use burn::store::{BurnpackStore, ModuleSnapshot};
 use burn::tensor::TensorData;
 use rand::Rng;
 use rand::SeedableRng;
@@ -77,6 +78,7 @@ pub struct EvalResult {
 #[derive(Debug, Serialize)]
 pub struct PpoReport {
     pub config: PpoConfig,
+    pub policy_path: String,
     pub initial_eval: EvalResult,
     pub final_eval: EvalResult,
     pub updates: Vec<UpdateLog>,
@@ -86,7 +88,7 @@ type Rollout = (Vec<Vec<Transition>>, f32, f32);
 
 struct Transition {
     observation: Vec<f32>,
-    action: Vec<f32>,
+    latent_action: Vec<f32>,
     log_prob: f32,
     value: f32,
     reward: f32,
@@ -95,13 +97,40 @@ struct Transition {
     return_: f32,
 }
 
+fn save_policy(policy: &ActorCritic, path: &Path) -> Result<(), Box<dyn Error>> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut store = BurnpackStore::from_file(path).overwrite(true);
+    policy
+        .save_into(&mut store)
+        .map_err(|error| format!("could not save policy to {}: {error}", path.display()))?;
+    Ok(())
+}
+
+pub(crate) fn select_device(cpu: bool) -> Result<Device, Box<dyn Error>> {
+    if cpu {
+        return Ok(Device::flex().autodiff());
+    }
+
+    #[cfg(feature = "cuda")]
+    {
+        Ok(Device::cuda(0).autodiff())
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        Err("this build has no CUDA backend; pass --cpu or rebuild with --features cuda".into())
+    }
+}
+
 pub fn run(
     model_path: &Path,
     output_path: &Path,
+    policy_path: &Path,
     config: PpoConfig,
     cpu: bool,
 ) -> Result<(), Box<dyn Error>> {
-    let device = if cpu { Device::flex() } else { Device::cuda(0) }.autodiff();
+    let device = select_device(cpu)?;
 
     let model = FlyModel::load_tethered(model_path)?;
     let task_config = TaskConfig {
@@ -177,8 +206,12 @@ pub fn run(
         final_eval.mean_ball_y_error
     );
 
+    save_policy(&policy, policy_path)?;
+    println!("saved {}", policy_path.display());
+
     let report = PpoReport {
         config,
+        policy_path: policy_path.display().to_string(),
         initial_eval,
         final_eval,
         updates: logs,
@@ -219,6 +252,7 @@ fn collect_rollout(
         let values = tensor_to_vec(value);
 
         for (index, env) in envs.iter_mut().enumerate() {
+            let mut latent_action = Vec::with_capacity(action_dim);
             let mut action = Vec::with_capacity(action_dim);
             let mut log_prob = 0.0_f32;
             for (action_index, log_std_value) in log_std.iter().enumerate().take(action_dim) {
@@ -226,10 +260,11 @@ fn collect_rollout(
                 let mean_value = mean_values[offset];
                 let std = log_std_value.exp();
                 let z = gaussian(rng);
-                let sampled = (mean_value + std * z).clamp(-1.0, 1.0);
-                let normalized = (sampled - mean_value) / std;
+                let latent = mean_value + std * z;
+                let normalized = (latent - mean_value) / std;
                 log_prob += -0.5 * normalized * normalized - log_std_value - 0.5 * LN_2PI;
-                action.push(sampled);
+                action.push(latent.tanh());
+                latent_action.push(latent);
             }
 
             let step = env.step(&action)?;
@@ -237,7 +272,7 @@ fn collect_rollout(
             ball_y_sum += env.ball_velocity()[1] as f32;
             trajectories[index].push(Transition {
                 observation: observations[index].clone(),
-                action,
+                latent_action,
                 log_prob,
                 value: values[index],
                 reward: step.reward as f32,
@@ -290,7 +325,7 @@ fn train_epochs(
     let (advantage_mean, advantage_std) = mean_std(&advantages);
     let mut order: Vec<usize> = (0..flat.len()).collect();
     let observation_dim = flat[0].observation.len();
-    let action_dim = flat[0].action.len();
+    let action_dim = flat[0].latent_action.len();
 
     let mut last_policy_loss = 0.0;
     let mut last_value_loss = 0.0;
@@ -305,7 +340,7 @@ fn train_epochs(
                 .collect();
             let actions: Vec<Vec<f32>> = chunk
                 .iter()
-                .map(|index| flat[*index].action.clone())
+                .map(|index| flat[*index].latent_action.clone())
                 .collect();
             let old_log_probs: Vec<Vec<f32>> = chunk
                 .iter()
@@ -386,7 +421,7 @@ fn evaluate(
         let (mean, _) = valid.forward(observation);
         let action = tensor_to_vec(mean)
             .into_iter()
-            .map(|value| value.clamp(-1.0, 1.0))
+            .map(|value| value.tanh())
             .collect::<Vec<f32>>();
         let result = env.step(&action)?;
         total_reward += result.reward as f32;
@@ -406,7 +441,7 @@ fn evaluate(
     })
 }
 
-fn rows_to_tensor(rows: &[Vec<f32>], width: usize, device: &Device) -> Tensor<2> {
+pub(crate) fn rows_to_tensor(rows: &[Vec<f32>], width: usize, device: &Device) -> Tensor<2> {
     let mut flat = Vec::with_capacity(rows.len() * width);
     for row in rows {
         debug_assert_eq!(row.len(), width);
@@ -415,7 +450,7 @@ fn rows_to_tensor(rows: &[Vec<f32>], width: usize, device: &Device) -> Tensor<2>
     Tensor::<2>::from_data(TensorData::new(flat, vec![rows.len(), width]), device)
 }
 
-fn tensor_to_vec<const D: usize>(tensor: Tensor<D>) -> Vec<f32> {
+pub(crate) fn tensor_to_vec<const D: usize>(tensor: Tensor<D>) -> Vec<f32> {
     tensor
         .to_data()
         .try_to_vec::<f32>()
@@ -447,6 +482,10 @@ fn mean_std(values: &[f32]) -> (f32, f32) {
 
 pub fn default_output() -> PathBuf {
     PathBuf::from("results/ppo.json")
+}
+
+pub fn default_policy() -> PathBuf {
+    PathBuf::from("results/ppo-policy.bpk")
 }
 
 #[cfg(test)]

@@ -2,3 +2,7 @@
 /data/
 /results/*.tmp
 *.log
+
+/results/frames/
+/results/preview-frames/
+/results/*.bpk

@@ -6,6 +6,11 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+default = []
+cuda = ["burn/cuda"]
+render = ["wired-sim/render"]
+
 [dependencies]
 burn.workspace = true
 rand.workspace = true

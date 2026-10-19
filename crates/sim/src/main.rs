@@ -54,6 +54,9 @@ fn run() -> Result<(), Box<dyn Error>> {
         print_help();
         return Ok(());
     }
+    if command == "render" {
+        return render_preview(&mut args);
+    }
     if command == "probe" {
         let mut tethered = false;
         while let Some(flag) = args.next() {
@@ -153,6 +156,65 @@ fn run() -> Result<(), Box<dyn Error>> {
     println!("{}", serde_json::to_string_pretty(&result)?);
 
     Ok(())
+}
+
+#[cfg(feature = "render")]
+fn render_preview(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
+    let mut model_path = PathBuf::from(DEFAULT_MODEL);
+    let mut output_dir = PathBuf::from("results/frames");
+    let mut seconds = 2.0_f64;
+    let mut fps = 30.0_f64;
+    let mut width = 640_usize;
+    let mut height = 480_usize;
+
+    while let Some(flag) = args.next() {
+        match flag.as_str() {
+            "--model" => model_path = PathBuf::from(value(&mut args, "--model")?),
+            "--output" => output_dir = PathBuf::from(value(&mut args, "--output")?),
+            "--seconds" => seconds = value(&mut args, "--seconds")?.parse()?,
+            "--fps" => fps = value(&mut args, "--fps")?.parse()?,
+            "--width" => width = value(&mut args, "--width")?.parse()?,
+            "--height" => height = value(&mut args, "--height")?.parse()?,
+            _ => return Err(format!("unknown argument: {flag}").into()),
+        }
+    }
+    if seconds <= 0.0 || fps <= 0.0 || width == 0 || height == 0 {
+        return Err("seconds, fps, width and height must be positive".into());
+    }
+
+    let model = FlyModel::load_tethered(&model_path)?;
+    let config = TaskConfig::default();
+    let mut env = model.tethered_env(config)?;
+    env.reset();
+    let mut renderer = env.frame_renderer(width, height)?;
+    fs::create_dir_all(&output_dir)?;
+
+    let control_period = model.timestep() * config.control_decimation as f64;
+    let steps = (seconds / control_period).round().max(1.0) as usize;
+    let stride = (1.0 / (fps * control_period)).round().max(1.0) as usize;
+    let action = vec![0.0_f32; model.action_dim()];
+    let mut frame = 0_usize;
+
+    for step in 0..steps {
+        env.step(&action)?;
+        if step % stride == 0 {
+            let path = output_dir.join(format!("frame_{frame:04}.png"));
+            env.render_frame(&mut renderer, &path)?;
+            frame += 1;
+        }
+    }
+
+    println!(
+        "rendered {frame} frames to {} ({:.1}s at {fps} fps, neutral actions)",
+        output_dir.display(),
+        frame as f64 / fps
+    );
+    Ok(())
+}
+
+#[cfg(not(feature = "render"))]
+fn render_preview(_args: impl Iterator<Item = String>) -> Result<(), Box<dyn Error>> {
+    Err("this build has no renderer; rebuild wired-sim with --features render".into())
 }
 
 fn probe(model_path: &Path, seconds: f64) -> Result<(), Box<dyn Error>> {
@@ -282,9 +344,11 @@ fn print_help() {
     println!(
         "wired-sim\n\n\
          spike [--model FILE] [--worlds N] [--threads N] [--seconds N] [--results FILE]\n\
-         probe [--model FILE] [--seconds N] [--tethered]\n\n\
+         probe [--model FILE] [--seconds N] [--tethered]\n\
+         render [--model FILE] [--output DIR] [--seconds N] [--fps N] [--width N] [--height N]\n\n\
          Defaults: data/flybody/fruitfly.xml, 8 worlds, all logical CPUs, 10 seconds,\n\
          results/spike.json. Controls are held at neutral normalized values.\n\
-         probe prints the reset height and a short neutral-action rollout."
+         probe prints the reset height and a short neutral-action rollout.\n\
+         render writes neutral-action PNG frames; build with --features render."
     );
 }
