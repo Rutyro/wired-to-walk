@@ -506,15 +506,13 @@ impl TetheredEnv {
         }
 
         let ball_velocity = self.ball_velocity();
-        let error = (ball_velocity[0].powi(2)
-            + (ball_velocity[1] + 5.0).powi(2)
-            + ball_velocity[2].powi(2))
-        .sqrt();
+        let forward = (-ball_velocity[1]).clamp(0.0, 5.0) / 5.0;
+        let lateral = ((ball_velocity[0].abs() + ball_velocity[2].abs()) / 10.0).clamp(0.0, 1.0);
         let action_penalty = action
             .iter()
             .map(|value| f64::from(*value).powi(2))
             .sum::<f64>();
-        let reward = 0.1 + 2.0 * (-error / 5.0).exp() - 0.0001 * action_penalty;
+        let reward = 0.1 + 2.0 * forward - 0.2 * lateral - 0.0001 * action_penalty;
 
         self.steps += 1;
         self.last_action.clear();

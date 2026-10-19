@@ -1,5 +1,5 @@
 use burn::module::{Module, Param};
-use burn::nn::{Linear, LinearConfig, Relu};
+use burn::nn::{Initializer, Linear, LinearConfig, Relu};
 use burn::prelude::*;
 
 /// A same-budget MLP baseline for the fly body.
@@ -66,7 +66,9 @@ impl ActorCritic {
         Self {
             trunk1: LinearConfig::new(input_dim, hidden_dim).init(device),
             trunk2: LinearConfig::new(hidden_dim, hidden_dim).init(device),
-            actor: LinearConfig::new(hidden_dim, action_dim).init(device),
+            actor: LinearConfig::new(hidden_dim, action_dim)
+                .with_initializer(Initializer::Zeros)
+                .init(device),
             critic: LinearConfig::new(hidden_dim, 1).init(device),
             log_std: Param::from_tensor(Tensor::<2>::full([1, action_dim], -0.5, device)),
         }
