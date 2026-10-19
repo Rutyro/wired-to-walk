@@ -1,0 +1,13 @@
+[package]
+name = "wired-policy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+burn.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+wired-connectome = { path = "../connectome" }
